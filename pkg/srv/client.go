@@ -56,7 +56,10 @@ func (client *ClientSrv) InitializeDAP() {
 
 func (client *ClientSrv) Test() {
 	time.Sleep(8 * time.Second)
-	var ret []byte
-	client.conn.Read(ret)
-	fmt.Println(ret)
+	var ret = make([]byte, 1024)
+	_, err := client.conn.Read(ret)
+	if (err != nil) {
+		panic(err)
+	}
+	fmt.Println(string(ret[:]))
 }
