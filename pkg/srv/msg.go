@@ -1,5 +1,7 @@
 package srv
 
+import "encoding/json"
+
 type ProtocolMessage struct {
 	Seq  int16  `json:"seq"`
 	Type string `json:"type"`
@@ -17,13 +19,20 @@ type Event struct {
 	Body  string `json:"body,omitempty"`
 }
 
-type Response struct {
+type Response[T any] struct {
 	ProtocolMessage
 	RequestSeq int16  `json:"request_seq"`
 	Success    bool   `json:"success"`
 	Command    string `json:"command"`
 	Message    string `json:"message,omitempty"`
-	Body       string `json:"body,omitempty"`
+	Body       T
+}
+
+type BaseRespone = Response[json.RawMessage]
+
+type internalResponse struct {
+	Err    error
+	Result *BaseRespone
 }
 
 type InitializeRequestArguments struct {

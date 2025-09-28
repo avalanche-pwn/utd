@@ -4,39 +4,55 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"time"
+	"log/slog"
 )
 
+const MaxConcurentRequests = 100
+
 type ClientSrv struct {
-	conn   net.Conn
-	seqNum int16
+	conn         net.Conn
+	seqNum       int16
+	exit         chan bool
+	sendQueue    chan Request[any]
+	recvRawQueue chan string
 }
 
 func (client *ClientSrv) Initialize(port string) error {
+	slog.Info("Initializing tcp connection")
 	var err error
 	client.conn, err = net.Dial("tcp", port)
 	client.seqNum = 0
+	client.exit = make(chan bool)
+	client.recvRawQueue = make(chan string)
 	return err
 }
 
 func (client *ClientSrv) Close() {
+	client.exit <- true
 	client.conn.Close()
 }
 
-func sendRequest[T any](client *ClientSrv, message Request[T]) {
+func sendRequest[T any](client *ClientSrv, message Request[T]) int16 {
+	message.Seq = client.seqNum
+	client.seqNum += 1
+	client.seqNum %= MaxConcurentRequests
+
+	// client.responses[message.Seq] <- internalResponse{errors.New("Timeout"), nil}
+	// client.responses[message.Seq] = make(chan internalResponse)
 	res, error := json.Marshal(message)
 	if error != nil {
 		panic("dupa")
 	}
 	length := len(res)
 
-	fmt.Printf("Content-Length: %d\r\n\r\n%s", length, res)
+	slog.Debug("Sending", "data", res)
 	fmt.Fprintf(client.conn, "Content-Length: %d\r\n\r\n%s", length, res)
+	return message.Seq
 }
 
 func (client *ClientSrv) InitializeDAP() {
+	slog.Info("Initializing DAP protocol")
 	var req Request[InitializeRequestArguments]
-	req.Seq = client.seqNum
 	req.Type = "request"
 	req.Command = "initialize"
 	req.Arguments.ClientName = "utd"
@@ -54,12 +70,36 @@ func (client *ClientSrv) InitializeDAP() {
 	sendRequest(client, req)
 }
 
-func (client *ClientSrv) Test() {
-	time.Sleep(8 * time.Second)
-	var ret = make([]byte, 1024)
-	_, err := client.conn.Read(ret)
-	if (err != nil) {
-		panic(err)
+func (client *ClientSrv) reader() {
+	for {
+		var length int
+		fmt.Fscanf(client.conn, "Content-Length: %d\r\n\r\n", &length)
+		slog.Debug("Receiving data", slog.Int("excepted_length", length))
+
+		buffer := make([]byte, length)
+		client.conn.Read(buffer)
+		client.recvRawQueue <- string(buffer[:])
 	}
-	fmt.Println(string(ret[:]))
+}
+
+func (client *ClientSrv) recvJson(json string) {
+	slog.Debug("Received", slog.String("data", json))
+}
+
+func (client *ClientSrv) ServeBlocking() {
+	go client.reader()
+	for {
+		select {
+		case message := <-client.sendQueue:
+			sendRequest(client, message)
+		case message := <-client.recvRawQueue:
+			client.recvJson(message)
+		case <-client.exit:
+			return
+		}
+	}
+}
+
+func (client *ClientSrv) Serve() {
+	go client.ServeBlocking()
 }
